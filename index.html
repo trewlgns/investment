@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>국제통화 & GDP 트래커</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; }
+    #root { min-height: 100vh; }
+    /* 탑 네비게이션 */
+    #app-nav {
+      display: flex; justify-content: center; gap: 8px;
+      padding: 14px 16px 0; background: #0f172a;
+    }
+    .app-nav-btn {
+      padding: 8px 22px; border-radius: 8px; border: 1px solid #334155;
+      cursor: pointer; font-size: 13px; font-weight: 600;
+      background: #1e293b; color: #64748b; transition: all .15s;
+    }
+    .app-nav-btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  </style>
+</head>
+<body>
+
+<!-- ── 앱 전환 네비게이션 ── -->
+<div id="app-nav">
+  <button class="app-nav-btn active" onclick="switchApp('swift')">💱 국제통화 비중 (COFER / SWIFT)</button>
+  <button class="app-nav-btn"        onclick="switchApp('gdp')">📊 세계 명목 GDP 추이</button>
+</div>
+<div id="root"></div>
+
+<!-- ── CDN 의존성 ── -->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<!-- ── 앱 전환 로직 ── -->
+<script>
+  let _currentApp = 'swift';
+  function switchApp(name) {
+    _currentApp = name;
+    document.querySelectorAll('.app-nav-btn').forEach((b, i) => {
+      b.classList.toggle('active', (i === 0 && name === 'swift') || (i === 1 && name === 'gdp'));
+    });
+    renderApp(name);
+  }
+  function renderApp(name) {
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    if (name === 'swift') root.render(React.createElement(SwiftApp));
+    else                  root.render(React.createElement(GdpApp));
+  }
+</script>
+
+<!-- ════════════════════════════════════════════════
+     앱 1 : IMF COFER / SWIFT RMB Tracker
+════════════════════════════════════════════════ -->
+<script type="text/babel" data-type="module">
+const { useState, useMemo, useRef } = React;
+const {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  Legend, ResponsiveContainer, ReferenceLine
+} = Recharts;
+
+// ── IMF COFER ────────────────────────────────────────────────────────────────
+const COFER_ANCHORS = {
+  USD:   [[1950,50],[1955,55],[1960,59],[1965,56],[1970,77],[1973,76],[1977,80],[1980,68],[1985,65],[1990,50],[1995,59],[1999,71],[2001,71],[2002,67],[2005,66],[2008,64],[2009,62],[2010,61],[2013,61],[2015,65],[2016,65],[2017,63],[2018,62],[2019,61],[2020,59],[2021,59],[2022,58],[2023,58],[2024,57],[2025,57]],
+  EUR:   [[1999,18],[2001,19],[2003,25],[2007,26],[2009,28],[2010,26],[2013,24],[2015,20],[2018,20],[2020,21],[2022,20],[2023,20],[2024,20],[2025,20]],
+  GBP:   [[1950,55],[1960,30],[1970,10],[1980,3],[1990,3],[2000,3],[2005,4],[2010,4],[2015,5],[2020,5],[2022,5],[2025,5]],
+  JPY:   [[1975,0],[1980,4],[1985,8],[1990,9],[1995,7],[2000,6],[2005,4],[2010,4],[2015,4],[2020,6],[2022,5],[2025,5]],
+  CNY:   [[2015,1],[2016,1],[2017,1],[2018,2],[2019,2],[2020,2],[2021,3],[2022,3],[2023,3],[2024,3],[2025,3]],
+  Other: [[1950,0],[1955,2],[1960,5],[1970,5],[1980,11],[1990,22],[1995,18],[1999,7],[2005,8],[2010,9],[2015,5],[2020,7],[2022,8],[2025,8]],
+};
+
+// ── SWIFT ─────────────────────────────────────────────────────────────────────
+const SWIFT_ANCHORS = {
+  USD:   [[2012,33],[2013,38],[2014,43],[2015,45],[2016,40],[2017,39],[2018,40],[2019,42],[2020,38],[2021,38],[2022,42],[2023,47],[2024,48],[2025,47]],
+  EUR:   [[2012,40],[2013,34],[2014,28],[2015,28],[2016,31],[2017,33],[2018,33],[2019,32],[2020,37],[2021,37],[2022,37],[2023,23],[2024,22],[2025,23]],
+  GBP:   [[2012,9],[2013,8],[2014,8],[2015,9],[2016,7],[2017,7],[2018,7],[2019,7],[2020,6],[2021,6],[2022,6],[2023,7],[2024,7],[2025,7]],
+  JPY:   [[2012,4],[2013,3],[2014,3],[2015,3],[2016,3],[2017,3],[2018,3],[2019,3],[2020,3],[2021,3],[2022,3],[2023,4],[2024,4],[2025,4]],
+  CNY:   [[2012,0.2],[2013,0.8],[2014,2],[2015,2.5],[2016,1.7],[2017,2],[2018,2],[2019,2],[2020,2],[2021,3],[2022,3],[2023,4],[2024,5],[2025,5]],
+  Other: [[2012,14],[2013,16],[2014,16],[2015,13],[2016,18],[2017,16],[2018,15],[2019,14],[2020,14],[2021,13],[2022,9],[2023,15],[2024,14],[2025,14]],
+};
+
+function buildAnnual(anchors, y0, y1) {
+  const rows = {};
+  for (const [key, pts] of Object.entries(anchors)) {
+    rows[key] = {};
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [ya, va] = pts[i], [yb, vb] = pts[i + 1];
+      for (let y = ya; y < yb; y++)
+        rows[key][y] = +(va + (vb - va) * (y - ya) / (yb - ya)).toFixed(2);
+    }
+    const last = pts[pts.length - 1];
+    rows[key][last[0]] = last[1];
+  }
+  const out = [];
+  for (let y = y0; y <= y1; y++) {
+    const d = { year: y };
+    for (const key of Object.keys(anchors)) d[key] = rows[key][y] ?? null;
+    out.push(d);
+  }
+  return out;
+}
+
+const COFER_DATA = buildAnnual(COFER_ANCHORS, 1950, 2025);
+const SWIFT_DATA = buildAnnual(SWIFT_ANCHORS, 2012, 2025);
+
+const CURRENCIES = [
+  { key: "USD",   label: "USD",  color: "#3b82f6" },
+  { key: "EUR",   label: "EUR",  color: "#f59e0b" },
+  { key: "GBP",   label: "GBP",  color: "#a855f7" },
+  { key: "JPY",   label: "JPY",  color: "#22c55e" },
+  { key: "CNY",   label: "CNY",  color: "#ef4444" },
+  { key: "Other", label: "기타", color: "#64748b" },
+];
+
+const COFER_EVENTS = { 1971:"닉슨쇼크(금본위 종료)", 1985:"플라자합의", 1999:"유로 출범", 2008:"금융위기", 2015:"CNY SDR 편입", 2022:"러시아 제재" };
+const SWIFT_EVENTS = { 2015:"CNY SDR 편입", 2020:"COVID-19", 2022:"러시아 제재" };
+
+window.SwiftApp = function SwiftApp() {
+  const [tab,    setTab]    = useState("cofer");
+  const [sel,    setSel]    = useState(["USD"]);
+  const [yr0,    setYr0]    = useState(1950);
+  const [yr1,    setYr1]    = useState(2025);
+  const [log,    setLog]    = useState(false);
+  const [custom, setCustom] = useState(null);
+  const fileRef = useRef();
+
+  const isCofer  = tab === "cofer";
+  const baseData = isCofer ? COFER_DATA : SWIFT_DATA;
+  const allData  = custom ?? baseData;
+  const minY     = isCofer ? 1950 : 2012;
+  const safeYr0  = Math.max(yr0, minY);
+
+  const filtered = useMemo(() =>
+    allData.filter(d => d.year >= safeYr0 && d.year <= yr1),
+    [allData, safeYr0, yr1]
+  );
+
+  const events        = isCofer ? COFER_EVENTS : SWIFT_EVENTS;
+  const eventsInRange = Object.entries(events).filter(([y]) => +y >= safeYr0 && +y <= yr1);
+  const toggle        = k => setSel(p => p.includes(k) ? p.filter(x => x !== k) : [...p, k]);
+
+  const handleCSV = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = ev => {
+      const lines  = ev.target.result.split("\n").filter(l => l.trim());
+      const hdrs   = lines[0].split(",").map(h => h.trim());
+      const parsed = lines.slice(1).map(line => {
+        const v = line.split(","), obj = {};
+        hdrs.forEach((h, i) => { obj[h] = h === "year" ? +v[i] : (parseFloat(v[i]) || null); });
+        return obj;
+      });
+      setCustom(parsed);
+    };
+    r.readAsText(f); e.target.value = "";
+  };
+
+  const ctrs     = CURRENCIES.filter(c => sel.includes(c.key));
+  const usdData  = filtered.filter(d => d.USD != null);
+  const usdPeak  = usdData.reduce((a, b) => b.USD > (a?.USD || 0) ? b : a, null);
+  const usdLow   = usdData.reduce((a, b) => b.USD < (a?.USD || 999) ? b : a, null);
+  const usdLatest = usdData[usdData.length - 1];
+
+  const s = {
+    wrap: { background:"#0f172a", color:"#e2e8f0", padding:"20px 14px" },
+    card: { background:"#1e293b", borderRadius:12, padding:"16px 4px 10px", marginBottom:18, border:"1px solid #334155" },
+    tabBtn: a => ({ padding:"7px 18px", border:"none", cursor:"pointer", fontSize:12, fontWeight:a?700:400, background:a?"#2563eb":"transparent", color:a?"#fff":"#64748b" }),
+    btn: (a, col="#475569") => ({ padding:"5px 14px", borderRadius:8, border:"1px solid #334155", background:a?col:"#1e293b", color:a?"#fff":"#64748b", cursor:"pointer", fontSize:12, fontWeight:a?700:400 }),
+  };
+
+  return (
+    <div style={s.wrap}>
+      <div style={{textAlign:"center",marginBottom:16}}>
+        <h1 style={{fontSize:20,fontWeight:800,color:"#f8fafc",margin:"0 0 4px"}}>국제통화 비중 추이</h1>
+        <p style={{fontSize:11,color:"#475569",margin:0}}>COFER: IMF 외환보유액 통화구성 · SWIFT: 국제결제 메시지 통화 비중 (value-based)</p>
+      </div>
+
+      {/* 탭 */}
+      <div style={{display:"flex",justifyContent:"center",marginBottom:14}}>
+        <div style={{background:"#1e293b",borderRadius:8,overflow:"hidden",border:"1px solid #334155"}}>
+          <button onClick={() => { setTab("cofer"); setCustom(null); setYr0(1950); }} style={s.tabBtn(isCofer)}>
+            IMF COFER <span style={{fontSize:10,opacity:.7}}>외환보유액 (1950–2025)</span>
+          </button>
+          <button onClick={() => { setTab("swift"); setCustom(null); setYr0(2012); }} style={s.tabBtn(!isCofer)}>
+            SWIFT <span style={{fontSize:10,opacity:.7}}>국제결제 (2012–2025)</span>
+          </button>
+        </div>
+      </div>
+
+      <div style={{textAlign:"center",marginBottom:12}}>
+        {isCofer
+          ? <p style={{fontSize:10,color:"#475569",margin:0}}>앵커 구간 선형보간 · 1995년 이전은 추정치 · 2024–2025년은 IMF 전망</p>
+          : <p style={{fontSize:10,color:"#475569",margin:0}}>SWIFT RMB Tracker 월간 데이터 연평균 · 2025년은 추정치</p>
+        }
+      </div>
+
+      {/* 컨트롤 */}
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center",marginBottom:12}}>
+        <button onClick={() => setLog(!log)} style={s.btn(log)}>{log?"✓ ":""}로그 스케일</button>
+        <button onClick={() => fileRef.current.click()} style={s.btn(!!custom,"#166534")}>{custom?"✓ CSV 로드됨":"📁 CSV 업로드"}</button>
+        {custom && <button onClick={() => setCustom(null)} style={s.btn(false)}>초기화</button>}
+        <input ref={fileRef} type="file" accept=".csv" style={{display:"none"}} onChange={handleCSV}/>
+      </div>
+
+      {/* 연도 범위 (COFER) */}
+      {isCofer && (
+        <div style={{background:"#1e293b",borderRadius:8,padding:"10px 16px",marginBottom:12,display:"flex",flexWrap:"wrap",alignItems:"center",gap:10,justifyContent:"center",border:"1px solid #334155"}}>
+          <span style={{fontSize:12,color:"#94a3b8"}}>시작: <strong style={{color:"#e2e8f0"}}>{safeYr0}년</strong></span>
+          <input type="range" min={1950} max={Math.min(2025,yr1-3)} value={yr0} onChange={e=>setYr0(+e.target.value)} style={{width:130,accentColor:"#2563eb"}}/>
+          <input type="range" min={Math.max(1950,yr0+3)} max={2025} value={yr1} onChange={e=>setYr1(+e.target.value)} style={{width:130,accentColor:"#2563eb"}}/>
+          <span style={{fontSize:12,color:"#94a3b8"}}>종료: <strong style={{color:"#e2e8f0"}}>{yr1}년</strong></span>
+        </div>
+      )}
+
+      {/* 통화 토글 */}
+      <div style={{display:"flex",flexWrap:"wrap",gap:6,justifyContent:"center",marginBottom:18}}>
+        <button onClick={() => setSel(sel.length===CURRENCIES.length ? ["USD"] : CURRENCIES.map(c=>c.key))}
+          style={{padding:"3px 10px",borderRadius:999,border:"1px solid #475569",background:"#1e293b",color:"#64748b",cursor:"pointer",fontSize:11}}>
+          {sel.length===CURRENCIES.length?"USD만":"전체 선택"}
+        </button>
+        {CURRENCIES.map(c => (
+          <button key={c.key} onClick={() => toggle(c.key)} title={c.key}
+            style={{padding:"3px 12px",borderRadius:999,border:`2px solid ${c.color}`,background:sel.includes(c.key)?c.color+"30":"transparent",color:sel.includes(c.key)?c.color:"#334155",cursor:"pointer",fontSize:11,fontWeight:sel.includes(c.key)?700:400}}>
+            {c.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 차트 */}
+      <div style={s.card}>
+        <h2 style={{textAlign:"center",fontSize:13,fontWeight:600,color:"#94a3b8",margin:"0 0 10px"}}>
+          {isCofer ? "IMF COFER — 글로벌 외환보유액 통화구성 비중 (%)" : "SWIFT — 국제결제 메시지 통화 비중 (%, value-based)"}
+        </h2>
+        <ResponsiveContainer width="100%" height={400}>
+          <LineChart data={filtered} margin={{top:5,right:20,left:5,bottom:5}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f"/>
+            <XAxis dataKey="year" stroke="#334155" tick={{fontSize:10,fill:"#64748b"}} tickCount={isCofer?16:14}/>
+            <YAxis scale={log?"log":"linear"} domain={log?[0.1,"auto"]:[0,isCofer?90:60]}
+              allowDataOverflow tickFormatter={v=>`${v}%`} stroke="#334155" tick={{fontSize:10,fill:"#64748b"}} width={42}/>
+            <Tooltip
+              contentStyle={{background:"#0f172a",border:"1px solid #334155",borderRadius:8,fontSize:12}}
+              labelStyle={{color:"#e2e8f0",fontWeight:700,marginBottom:4}}
+              formatter={(v,k) => [`${v?.toFixed?.(1)}%`, CURRENCIES.find(c=>c.key===k)?.label ?? k]}/>
+            <Legend formatter={k=>CURRENCIES.find(c=>c.key===k)?.label??k} wrapperStyle={{fontSize:11,paddingTop:6}}/>
+            {eventsInRange.map(([y, label]) => (
+              <ReferenceLine key={y} x={+y} stroke="#475569" strokeDasharray="3 3"
+                label={{value:label,position:"insideTopLeft",fill:"#94a3b8",fontSize:8,angle:-45,dx:2}}/>
+            ))}
+            {isCofer && <ReferenceLine x={2024} stroke="#fbbf2455" strokeDasharray="4 4"/>}
+            {ctrs.map(c => (
+              <Line key={c.key} type="monotone" dataKey={c.key} stroke={c.color}
+                strokeWidth={c.key==="USD"?3:1.5} dot={false} activeDot={{r:4}} connectNulls/>
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* USD 요약 */}
+      {sel.includes("USD") && usdLatest && (
+        <div style={{...s.card,padding:"14px 18px"}}>
+          <h2 style={{fontSize:12,fontWeight:600,color:"#94a3b8",margin:"0 0 10px"}}>USD 비중 요약 ({isCofer?"COFER":"SWIFT"})</h2>
+          <div style={{display:"flex",flexWrap:"wrap",gap:20,fontSize:12}}>
+            {usdPeak && <div style={{background:"#0f172a",borderRadius:8,padding:"10px 16px",flex:1,minWidth:100}}>
+              <div style={{color:"#64748b",marginBottom:4,fontSize:10}}>📈 최고점</div>
+              <div style={{color:"#93c5fd",fontWeight:700,fontSize:18}}>{usdPeak.USD}%</div>
+              <div style={{color:"#475569",fontSize:10}}>{usdPeak.year}년</div>
+            </div>}
+            {usdLow && <div style={{background:"#0f172a",borderRadius:8,padding:"10px 16px",flex:1,minWidth:100}}>
+              <div style={{color:"#64748b",marginBottom:4,fontSize:10}}>📉 최저점</div>
+              <div style={{color:"#f87171",fontWeight:700,fontSize:18}}>{usdLow.USD}%</div>
+              <div style={{color:"#475569",fontSize:10}}>{usdLow.year}년</div>
+            </div>}
+            <div style={{background:"#0f172a",borderRadius:8,padding:"10px 16px",flex:1,minWidth:100}}>
+              <div style={{color:"#64748b",marginBottom:4,fontSize:10}}>📍 최근 ({usdLatest.year})</div>
+              <div style={{color:"#e2e8f0",fontWeight:700,fontSize:18}}>{usdLatest.USD}%</div>
+              <div style={{color:"#475569",fontSize:10}}>
+                {usdPeak && usdLatest.year!==usdPeak.year ? `고점 대비 −${(usdPeak.USD-usdLatest.USD).toFixed(1)}%p` : "현재"}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!isCofer && (
+        <div style={{background:"#1e293b",borderRadius:8,padding:"12px 16px",marginBottom:18,border:"1px solid #334155"}}>
+          <p style={{fontSize:11,color:"#475569",margin:0,lineHeight:1.8}}>
+            <strong style={{color:"#64748b"}}>COFER vs SWIFT 차이</strong><br/>
+            COFER는 각국 중앙은행이 <em>보유</em>하는 외환의 통화구성. SWIFT는 실제 <em>결제·송금</em> 메시지 기준.
+          </p>
+        </div>
+      )}
+
+      <div style={{background:"#0f172a",borderRadius:8,padding:"10px 14px",border:"1px solid #1e293b"}}>
+        <p style={{margin:0,fontSize:11,color:"#475569",lineHeight:1.8}}>
+          <strong style={{color:"#64748b"}}>CSV 형식</strong> (단위: %)<br/>
+          <code style={{background:"#1e293b",padding:"2px 6px",borderRadius:4,color:"#94a3b8",fontSize:10}}>year,USD,EUR,GBP,JPY,CNY,Other</code>
+        </p>
+      </div>
+    </div>
+  );
+}
+</script>
+
+<!-- ════════════════════════════════════════════════
+     앱 2 : 세계 명목 GDP 트래커
+════════════════════════════════════════════════ -->
+<script type="text/babel" data-type="module">
+const { useState: useState2, useMemo: useMemo2, useRef: useRef2 } = React;
+const {
+  LineChart: LC2, Line: L2, XAxis: XA2, YAxis: YA2, CartesianGrid: CG2, Tooltip: TT2,
+  Legend: LG2, ResponsiveContainer: RC2, AreaChart: AC2, Area: A2, ReferenceLine: RL2
+} = Recharts;
+
+const ANCHORS = {
+  USA:     [[1950,300],[1955,415],[1960,543],[1965,744],[1970,1076],[1975,1688],[1980,2858],[1985,4339],[1990,5963],[1995,7640],[2000,10285],[2005,13094],[2010,15049],[2015,18225],[2019,21433],[2020,21060],[2021,23315],[2022,25440],[2023,27360],[2024,28780],[2025,29500]],
+  China:   [[1950,28],[1955,35],[1960,60],[1965,70],[1970,92],[1975,164],[1980,191],[1985,309],[1990,361],[1995,731],[2000,1211],[2005,2286],[2010,6088],[2015,11062],[2019,14343],[2020,14688],[2021,17734],[2022,17960],[2023,17700],[2024,18530],[2025,19300]],
+  Japan:   [[1950,11],[1955,24],[1960,44],[1965,91],[1970,213],[1975,521],[1980,1105],[1985,1399],[1990,3133],[1995,5449],[2000,4888],[2005,4755],[2010,5700],[2015,4395],[2019,5082],[2020,5040],[2021,4944],[2022,4230],[2023,4213],[2024,4100],[2025,4200]],
+  Germany: [[1950,26],[1955,50],[1960,73],[1965,115],[1970,217],[1975,487],[1980,854],[1985,663],[1990,1764],[1995,2592],[2000,1950],[2005,2861],[2010,3418],[2015,3376],[2019,3888],[2020,3890],[2021,4260],[2022,4082],[2023,4456],[2024,4530],[2025,4600]],
+  UK:      [[1950,50],[1955,63],[1960,73],[1965,101],[1970,132],[1975,244],[1980,562],[1985,479],[1990,1092],[1995,1339],[2000,1659],[2005,2545],[2010,2485],[2015,2895],[2019,2854],[2020,2707],[2021,3131],[2022,3089],[2023,3079],[2024,3300],[2025,3400]],
+  France:  [[1950,30],[1955,40],[1960,62],[1965,100],[1970,148],[1975,357],[1980,701],[1985,548],[1990,1269],[1995,1604],[2000,1362],[2005,2196],[2010,2650],[2015,2439],[2019,2716],[2020,2722],[2021,2957],[2022,2784],[2023,2923],[2024,3000],[2025,3100]],
+  Italy:   [[1950,20],[1955,27],[1960,40],[1965,60],[1970,113],[1975,225],[1980,480],[1985,437],[1990,1170],[1995,1172],[2000,1143],[2005,1856],[2010,2127],[2015,1837],[2019,2011],[2020,1905],[2021,2107],[2022,2068],[2023,2255],[2024,2300],[2025,2350]],
+  Canada:  [[1950,28],[1955,36],[1960,41],[1965,57],[1970,87],[1975,178],[1980,274],[1985,357],[1990,594],[1995,601],[2000,742],[2005,1170],[2010,1614],[2015,1556],[2019,1741],[2020,1644],[2021,1988],[2022,2140],[2023,2140],[2024,2200],[2025,2230]],
+  India:   [[1950,30],[1955,32],[1960,37],[1965,48],[1970,63],[1975,100],[1980,183],[1985,237],[1990,321],[1995,367],[2000,476],[2005,834],[2010,1729],[2015,2104],[2019,2870],[2020,2671],[2021,3150],[2022,3389],[2023,3737],[2024,4112],[2025,4500]],
+  Korea:   [[1950,3],[1955,3],[1960,4],[1965,3],[1970,9],[1975,21],[1980,64],[1985,101],[1990,283],[1995,559],[2000,561],[2005,898],[2010,1094],[2015,1383],[2019,1647],[2020,1647],[2021,1811],[2022,1673],[2023,1712],[2024,1750],[2025,1800]],
+  World:   [[1950,700],[1955,1000],[1960,1400],[1965,2000],[1970,3300],[1975,6400],[1980,11000],[1985,12000],[1990,22000],[1995,31000],[2000,33500],[2005,47000],[2010,65000],[2015,75000],[2019,87750],[2020,85000],[2021,97000],[2022,100000],[2023,105000],[2024,109000],[2025,114000]],
+};
+
+const COUNTRIES = [
+  { key:"USA",     label:"미국",     color:"#3b82f6" },
+  { key:"China",   label:"중국",     color:"#ef4444" },
+  { key:"Japan",   label:"일본",     color:"#eab308" },
+  { key:"Germany", label:"독일",     color:"#22c55e" },
+  { key:"UK",      label:"영국",     color:"#a855f7" },
+  { key:"France",  label:"프랑스",   color:"#06b6d4" },
+  { key:"Italy",   label:"이탈리아", color:"#f472b6" },
+  { key:"Canada",  label:"캐나다",   color:"#f97316" },
+  { key:"India",   label:"인도",     color:"#fb923c" },
+  { key:"Korea",   label:"한국",     color:"#94a3b8" },
+];
+
+const EVENTS2 = { 1973:"오일쇼크", 1979:"2차오일쇼크", 1990:"냉전종식", 1997:"아시아금융위기", 2000:"닷컴버블", 2008:"금융위기", 2020:"COVID-19" };
+
+function buildAnnual2(anchors, y0, y1) {
+  const rows = {};
+  for (const [key, pts] of Object.entries(anchors)) {
+    rows[key] = {};
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [ya, va] = pts[i], [yb, vb] = pts[i+1];
+      for (let y = ya; y < yb; y++)
+        rows[key][y] = +(va + (vb - va) * (y - ya) / (yb - ya)).toFixed(1);
+    }
+    const last = pts[pts.length-1];
+    rows[key][last[0]] = last[1];
+  }
+  const out = [];
+  for (let y = y0; y <= y1; y++) {
+    const d = { year: y, est: y >= 2024 };
+    for (const key of Object.keys(anchors)) d[key] = rows[key][y] ?? null;
+    out.push(d);
+  }
+  return out;
+}
+
+const BASE_DATA2 = buildAnnual2(ANCHORS, 1950, 2025);
+const fmt  = v => v == null ? "N/A" : v >= 1000 ? `$${(v/1000).toFixed(2)}T` : `$${Math.round(v)}B`;
+const yFmt = v => v >= 1000 ? `$${(v/1000).toFixed(0)}T` : `$${v}B`;
+
+window.GdpApp = function GdpApp() {
+  const [log,    setLog]    = useState2(false);
+  const [sel,    setSel]    = useState2(COUNTRIES.map(c => c.key));
+  const [yr0,    setYr0]    = useState2(1950);
+  const [yr1,    setYr1]    = useState2(2025);
+  const [custom, setCustom] = useState2(null);
+  const fileRef = useRef2();
+
+  const allData  = custom ?? BASE_DATA2;
+  const filtered = useMemo2(() => allData.filter(d => d.year >= yr0 && d.year <= yr1), [allData, yr0, yr1]);
+
+  const shareData = useMemo2(() =>
+    filtered.map(d => ({ year:d.year, est:d.est, share: d.World ? +(d.USA / d.World * 100).toFixed(2) : null })),
+    [filtered]
+  );
+
+  const peak   = useMemo2(() => shareData.reduce((a, b) => b.share > (a?.share||0) ? b : a, null), [shareData]);
+  const latest = shareData[shareData.length - 1];
+  const toggle = k => setSel(p => p.includes(k) ? p.filter(x=>x!==k) : [...p,k]);
+
+  const handleCSV = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = ev => {
+      const lines  = ev.target.result.split("\n").filter(l=>l.trim());
+      const hdrs   = lines[0].split(",").map(h=>h.trim());
+      const parsed = lines.slice(1).map(line => {
+        const v = line.split(","), obj = { est:false };
+        hdrs.forEach((h,i) => { obj[h] = h==="year" ? +v[i] : (parseFloat(v[i])||null); });
+        return obj;
+      });
+      setCustom(parsed);
+    };
+    r.readAsText(f); e.target.value="";
+  };
+
+  const eventsInRange = Object.entries(EVENTS2).filter(([y]) => +y>=yr0 && +y<=yr1);
+  const ctrs = COUNTRIES.filter(c => sel.includes(c.key));
+
+  const s = {
+    wrap: { background:"#0f172a", color:"#e2e8f0", padding:"20px 14px" },
+    card: { background:"#1e293b", borderRadius:12, padding:"16px 4px 10px", marginBottom:18, border:"1px solid #334155" },
+    btn: (a, col="#2563eb") => ({ padding:"5px 14px", borderRadius:8, border:"1px solid #334155", background:a?col:"#1e293b", color:a?"#fff":"#64748b", cursor:"pointer", fontSize:12, fontWeight:a?700:400 }),
+  };
+
+  const CustomDot = ({ cx, cy, payload }) =>
+    payload?.est ? <circle cx={cx} cy={cy} r={3} fill="#fbbf24" stroke="none"/> : null;
+
+  return (
+    <div style={s.wrap}>
+      <div style={{textAlign:"center",marginBottom:16}}>
+        <h1 style={{fontSize:20,fontWeight:800,color:"#f8fafc",margin:"0 0 4px"}}>세계 명목 GDP 추이</h1>
+        <p style={{fontSize:11,color:"#475569",margin:0}}>
+          현재 미국달러(Nominal USD) · World Bank WDI · IMF WEO &nbsp;·&nbsp;
+          <span style={{color:"#fbbf24"}}>●</span> = IMF 추정치 (2024–2025)
+        </p>
+      </div>
+
+      {/* 컨트롤 */}
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center",marginBottom:12}}>
+        <button onClick={()=>setLog(!log)} style={s.btn(log,"#475569")}>{log?"✓ ":""}로그 스케일</button>
+        <button onClick={()=>fileRef.current.click()} style={s.btn(!!custom,"#166534")}>{custom?"✓ CSV 로드됨":"📁 CSV 업로드"}</button>
+        {custom && <button onClick={()=>setCustom(null)} style={s.btn(false)}>초기화</button>}
+        <input ref={fileRef} type="file" accept=".csv" style={{display:"none"}} onChange={handleCSV}/>
+      </div>
+
+      {/* 연도 범위 */}
+      <div style={{background:"#1e293b",borderRadius:8,padding:"10px 16px",marginBottom:12,display:"flex",flexWrap:"wrap",alignItems:"center",gap:10,justifyContent:"center",border:"1px solid #334155"}}>
+        <span style={{fontSize:12,color:"#94a3b8"}}>시작: <strong style={{color:"#e2e8f0"}}>{yr0}년</strong></span>
+        <input type="range" min={1950} max={Math.min(2025,yr1-3)} value={yr0} onChange={e=>setYr0(+e.target.value)} style={{width:130,accentColor:"#2563eb"}}/>
+        <input type="range" min={Math.max(1950,yr0+3)} max={2025} value={yr1} onChange={e=>setYr1(+e.target.value)} style={{width:130,accentColor:"#2563eb"}}/>
+        <span style={{fontSize:12,color:"#94a3b8"}}>종료: <strong style={{color:"#e2e8f0"}}>{yr1}년</strong></span>
+      </div>
+
+      {/* 국가 토글 */}
+      <div style={{display:"flex",flexWrap:"wrap",gap:6,justifyContent:"center",marginBottom:18}}>
+        <button onClick={()=>setSel(sel.length===COUNTRIES.length ? [] : COUNTRIES.map(c=>c.key))}
+          style={{padding:"3px 10px",borderRadius:999,border:"1px solid #475569",background:"#1e293b",color:"#64748b",cursor:"pointer",fontSize:11}}>
+          {sel.length===COUNTRIES.length?"전체 해제":"전체 선택"}
+        </button>
+        {COUNTRIES.map(c => (
+          <button key={c.key} onClick={()=>toggle(c.key)}
+            style={{padding:"3px 10px",borderRadius:999,border:`2px solid ${c.color}`,background:sel.includes(c.key)?c.color+"28":"transparent",color:sel.includes(c.key)?c.color:"#334155",cursor:"pointer",fontSize:11,fontWeight:sel.includes(c.key)?700:400}}>
+            {c.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 차트 1 — GDP */}
+      <div style={s.card}>
+        <h2 style={{textAlign:"center",fontSize:13,fontWeight:600,color:"#94a3b8",margin:"0 0 10px"}}>국가별 명목 GDP (현재 USD)</h2>
+        <RC2 width="100%" height={380}>
+          <LC2 data={filtered} margin={{top:5,right:20,left:10,bottom:5}}>
+            <CG2 strokeDasharray="3 3" stroke="#1e3a5f"/>
+            <XA2 dataKey="year" stroke="#334155" tick={{fontSize:10,fill:"#64748b"}} tickCount={Math.min(filtered.length,15)}/>
+            <YA2 scale={log?"log":"linear"} domain={log?[3,"auto"]:[0,"auto"]} allowDataOverflow tickFormatter={yFmt} stroke="#334155" tick={{fontSize:10,fill:"#64748b"}} width={65}/>
+            <TT2
+              contentStyle={{background:"#0f172a",border:"1px solid #334155",borderRadius:8,fontSize:12}}
+              labelStyle={{color:"#e2e8f0",fontWeight:700,marginBottom:4}}
+              labelFormatter={y => { const d=filtered.find(r=>r.year===y); return `${y}년${d?.est?" (IMF 추정)":""}`; }}
+              formatter={(v,k) => [fmt(v), COUNTRIES.find(c=>c.key===k)?.label ?? k]}/>
+            <LG2 formatter={k=>COUNTRIES.find(c=>c.key===k)?.label??k} wrapperStyle={{fontSize:11,paddingTop:6}}/>
+            {eventsInRange.map(([y,label]) => (
+              <RL2 key={y} x={+y} stroke="#475569" strokeDasharray="3 3"
+                label={{value:label,position:"insideTopLeft",fill:"#94a3b8",fontSize:9,angle:-45,dx:2}}/>
+            ))}
+            <RL2 x={2024} stroke="#fbbf2455" strokeDasharray="4 4"/>
+            {ctrs.map(c => (
+              <L2 key={c.key} type="monotone" dataKey={c.key} stroke={c.color} strokeWidth={2}
+                dot={<CustomDot/>} activeDot={{r:5}} connectNulls/>
+            ))}
+          </LC2>
+        </RC2>
+      </div>
+
+      {/* 차트 2 — 미국 비중 */}
+      <div style={s.card}>
+        <h2 style={{textAlign:"center",fontSize:13,fontWeight:600,color:"#94a3b8",margin:"0 0 10px"}}>미국의 세계 GDP 비중 (%)</h2>
+        <RC2 width="100%" height={250}>
+          <AC2 data={shareData} margin={{top:5,right:20,left:0,bottom:5}}>
+            <defs>
+              <linearGradient id="grad2" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%"  stopColor="#2563eb" stopOpacity={0.4}/>
+                <stop offset="95%" stopColor="#2563eb" stopOpacity={0.03}/>
+              </linearGradient>
+            </defs>
+            <CG2 strokeDasharray="3 3" stroke="#1e3a5f"/>
+            <XA2 dataKey="year" stroke="#334155" tick={{fontSize:10,fill:"#64748b"}} tickCount={Math.min(shareData.length,15)}/>
+            <YA2 domain={[0,55]} tickFormatter={v=>`${v}%`} stroke="#334155" tick={{fontSize:10,fill:"#64748b"}} width={38}/>
+            <TT2
+              contentStyle={{background:"#0f172a",border:"1px solid #334155",borderRadius:8,fontSize:12}}
+              labelStyle={{color:"#e2e8f0",fontWeight:700}}
+              labelFormatter={y=>{ const d=shareData.find(r=>r.year===y); return `${y}년${d?.est?" (IMF 추정)":""}`; }}
+              formatter={v=>[`${v}%`,"미국 비중"]}/>
+            <RL2 y={25} stroke="#475569" strokeDasharray="4 4" label={{value:"25%",position:"right",fill:"#64748b",fontSize:10}}/>
+            <RL2 x={2024} stroke="#fbbf2455" strokeDasharray="4 4"/>
+            {eventsInRange.map(([y]) => <RL2 key={y} x={+y} stroke="#334155" strokeDasharray="3 3"/>)}
+            <A2 type="monotone" dataKey="share" stroke="#3b82f6" strokeWidth={2.5} fill="url(#grad2)" dot={<CustomDot/>} connectNulls/>
+          </AC2>
+        </RC2>
+        {peak && latest && (
+          <div style={{display:"flex",justifyContent:"center",gap:28,fontSize:12,color:"#64748b",marginTop:10,paddingRight:16}}>
+            <span>📈 최고: <strong style={{color:"#93c5fd"}}>{peak.year}년 {peak.share}%</strong></span>
+            <span>📍 최근: <strong style={{color:"#93c5fd"}}>{latest.year}년 {latest.share}%</strong></span>
+            <span>📉 변화: <strong style={{color:"#f87171"}}>−{(peak.share-latest.share).toFixed(1)}%p</strong></span>
+          </div>
+        )}
+      </div>
+
+      <div style={{background:"#0f172a",borderRadius:8,padding:"10px 14px",border:"1px solid #1e293b"}}>
+        <p style={{margin:0,fontSize:11,color:"#475569",lineHeight:1.8}}>
+          <strong style={{color:"#64748b"}}>CSV 업로드 형식</strong> (단위: 10억 USD · World 컬럼 필수)<br/>
+          <code style={{background:"#1e293b",padding:"2px 6px",borderRadius:4,color:"#94a3b8",fontSize:10}}>year,USA,China,Japan,Germany,UK,France,Italy,Canada,India,Korea,World</code>
+        </p>
+      </div>
+    </div>
+  );
+}
+</script>
+
+<!-- ── 최초 렌더링 ── -->
+<script>
+  // Babel 변환이 완료된 후 렌더링
+  window.addEventListener('load', () => renderApp('swift'));
+</script>
+</body>
+</html>
